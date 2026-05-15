@@ -1,4 +1,4 @@
-# Etapa 1: Compilar la aplicación con Mavsdfd
+# Etapa 1: Compilar la aplicación con Masdfsfsdf
 FROM maven:3.9.6-eclipse-temurin-17 AS build
 WORKDIR /app
 COPY pom.xml .
