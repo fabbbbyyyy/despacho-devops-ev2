@@ -41,6 +41,8 @@ Pasos:
 
 Resultado: la imagen de la API queda publicada en ECR.
 
+> Nota: el workflow publica tag inmutable (`${{ github.sha }}`) y `latest`. Para despliegues más predecibles y rollback controlado, se recomienda desplegar por SHA.
+
 ## Job 2: Deploy to EC2 via SSM
 
 Nombre del job: `deploy-to-ec2`  
@@ -62,6 +64,10 @@ Pasos:
    - Limpia imágenes no utilizadas con `docker image prune -a -f`.
 
 Resultado: despliegue actualizado de base de datos + API en EC2.
+
+> Notas operativas:
+> - El `sleep 15` es una espera fija y puede no garantizar que MySQL esté realmente listo; se recomienda usar healthchecks o una verificación activa antes de iniciar la API.
+> - `docker image prune -a -f` elimina todas las imágenes no usadas, lo que puede reducir capacidad de rollback rápido; para una limpieza menos agresiva se puede usar `docker image prune -f`.
 
 ## Resumen del flujo
 
