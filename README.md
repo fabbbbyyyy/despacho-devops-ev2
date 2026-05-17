@@ -1,218 +1,72 @@
-# API REST de Despachos
+# Flujo CI/CD
 
-Proyecto Spring Boot para gestionar despachos mediante una API REST conectada a MySQL. Permite crear, consultar, actualizar y eliminar registros de despacho, además de exponer documentación interactiva con Swagger/OpenAPI.
+Este repositorio usa el workflow `.github/workflows/main.yml` para compilar, publicar y desplegar la aplicación automáticamente.
 
-## Tecnologías
+## Disparador
 
-- Java 17
-- Spring Boot 3.4.4
-- Spring Web
-- Spring Data JPA
-- MySQL
-- Lombok
-- springdoc OpenAPI / Swagger UI
-- Docker
-- GitHub Actions + AWS (ECR, EC2, SSM)
+El pipeline se ejecuta en cada `push` a la rama `main`.
 
-## Qué hace el proyecto
+## Variables y secretos usados
 
-La aplicación administra entidades `Despacho` con los siguientes datos:
+### Variable global del workflow
 
-- `idDespacho`: identificador del despacho
-- `fechaDespacho`: fecha del despacho
-- `patenteCamion`: patente del camión
-- `intento`: número de intento de entrega
-- `idCompra`: identificador de la compra asociada
-- `direccionCompra`: dirección de entrega
-- `valorCompra`: valor de la compra
-- `despachado`: indica si el despacho fue realizado
+- `REGISTRY_URL`: `${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com`
 
-## Cómo está organizado
+### Secrets requeridos
 
-```text
-src/main/java/com/citt
-├── config                # CORS y OpenAPI
-├── controller            # Endpoints REST
-├── exceptions            # Manejo de errores
-└── persistence
-    ├── entity            # Entidad Despacho
-    ├── repository        # JpaRepository
-    └── services          # Lógica de negocio
-```
-
-## Flujo de funcionamiento
-
-1. El cliente consume los endpoints bajo `/api/v1/despachos`.
-2. `DespachoController` recibe la solicitud HTTP.
-3. `DespachoServiceImpl` aplica la lógica de negocio.
-4. `DespachoRepository` persiste y consulta los datos en MySQL.
-5. Si ocurre un error de validación o no existe un despacho, `RestResponseEntityExceptionHandler` responde con un error estructurado.
-
-## Configuración
-
-El proyecto usa estas variables de entorno para la conexión a base de datos:
-
-- `DB_ENDPOINT`
-- `DB_PORT`
+- `AWS_ACCOUNT_ID`
+- `AWS_REGION`
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_SESSION_TOKEN`
+- `AWS_ECR_REPOSITORY`
+- `EC2_INSTANCE_ID`
 - `DB_NAME`
-- `DB_USERNAME`
+- `DB_USER`
 - `DB_PASSWORD`
 
-Propiedades principales:
+## Job 1: Build and Push Image
 
-- Puerto de la API: `8081`
-- Swagger UI: `/swagger-ui.html`
-- Hibernate: `spring.jpa.hibernate.ddl-auto=update`
-- CORS abierto para todos los orígenes
+Nombre del job: `build-and-push`
 
-## Cómo ejecutar el proyecto localmente
+Pasos:
 
-### 1. Requisitos
+1. Checkout del repositorio.
+2. Configuración de credenciales AWS.
+3. Login a Amazon ECR.
+4. Build de la imagen Docker con dos tags:
+   - `${{ github.sha }}`
+   - `latest`
+5. Push de ambas tags al repositorio ECR.
 
-- Java 17
-- Maven Wrapper (`./mvnw`)
-- MySQL disponible
+Resultado: la imagen de la API queda publicada en ECR.
 
-### 2. Definir variables de entorno
+## Job 2: Deploy to EC2 via SSM
 
-Ejemplo:
+Nombre del job: `deploy-to-ec2`  
+Dependencia: se ejecuta después de `build-and-push`.
 
-```bash
-export DB_ENDPOINT=localhost
-export DB_PORT=3306
-export DB_NAME=despacho
-export DB_USERNAME=root
-export DB_PASSWORD=tu_clave
-```
+Pasos:
 
-### 3. Ejecutar la aplicación
+1. Configuración de credenciales AWS.
+2. Ejecución de un `aws ssm send-command` contra la instancia EC2.
+3. En la instancia, el script:
+   - Crea el directorio `/home/ec2-user/backend-despacho`.
+   - Hace login a ECR.
+   - Descarga la imagen `latest`.
+   - Crea la red Docker `api-network` (si no existe).
+   - Detiene y elimina contenedores previos `springboot-api` y `mysql-db`.
+   - Levanta contenedor MySQL (`mysql:8.0`) con volumen `mysql_data`.
+   - Espera 15 segundos.
+   - Levanta contenedor `springboot-api` en puerto `8081` con variables de entorno para DB.
+   - Limpia imágenes no utilizadas con `docker image prune -a -f`.
 
-```bash
-./mvnw spring-boot:run
-```
+Resultado: despliegue actualizado de base de datos + API en EC2.
 
-La API quedará disponible en:
+## Resumen del flujo
 
-```text
-http://localhost:8081
-```
-
-## Cómo ejecutar con Docker
-
-Construir imagen:
-
-```bash
-docker build -t despacho-api .
-```
-
-Ejecutar contenedor:
-
-```bash
-docker run --rm -p 8081:8081 \
-  -e DB_ENDPOINT=host.docker.internal \
-  -e DB_PORT=3306 \
-  -e DB_NAME=despacho \
-  -e DB_USERNAME=root \
-  -e DB_PASSWORD=tu_clave \
-  despacho-api
-```
-
-## Documentación Swagger
-
-Con la aplicación levantada, la documentación interactiva está en:
-
-```text
-http://localhost:8081/swagger-ui.html
-```
-
-## Endpoints disponibles
-
-Base URL:
-
-```text
-/api/v1/despachos
-```
-
-### Crear despacho
-
-- Método: `POST`
-- Ruta: `/api/v1/despachos`
-
-Body de ejemplo:
-
-```json
-{
-  "fechaDespacho": "2026-05-17",
-  "patenteCamion": "ABCD12",
-  "intento": 1,
-  "idCompra": 1001,
-  "direccionCompra": "Av. Siempre Viva 123",
-  "valorCompra": 25990,
-  "despachado": false
-}
-```
-
-### Obtener todos los despachos
-
-- Método: `GET`
-- Ruta: `/api/v1/despachos`
-
-### Obtener despacho por ID
-
-- Método: `GET`
-- Ruta: `/api/v1/despachos/{idDespacho}`
-
-### Actualizar despacho
-
-- Método: `PUT`
-- Ruta: `/api/v1/despachos/{idDespacho}`
-
-### Eliminar despacho
-
-- Método: `DELETE`
-- Ruta: `/api/v1/despachos/{idDespacho}`
-
-## Respuestas de error
-
-Cuando un despacho no existe, la API responde con `404 Not Found`.
-
-Cuando hay errores de validación, la API responde con `400 Bad Request` y devuelve un objeto con:
-
-- `status`
-- `message`
-- `errors`
-
-## Pruebas
-
-Para ejecutar pruebas:
-
-```bash
-./mvnw test
-```
-
-Importante: la prueba de carga de contexto necesita que las variables de base de datos estén definidas y que MySQL sea accesible, porque la aplicación inicializa JPA al arrancar.
-
-## Despliegue automático
-
-El flujo definido en `.github/workflows/main.yml` hace lo siguiente al hacer push a `main`:
-
-1. Compila la imagen Docker.
-2. La publica en Amazon ECR.
-3. Se conecta a AWS SSM.
-4. En EC2 crea una red Docker.
-5. Levanta un contenedor MySQL.
-6. Levanta el contenedor de la API con las variables de entorno necesarias.
-
-## Archivo Dockerfile
-
-El `Dockerfile` usa construcción multi-stage:
-
-1. Compila el proyecto con Maven y Java 17.
-2. Copia el `.jar` generado a una imagen liviana con JRE 17.
-3. Expone el puerto `8081`.
-
-## Uso recomendado
-
-- Usar Swagger para probar endpoints rápidamente.
-- Definir variables de entorno antes de ejecutar pruebas o levantar la app.
-- Tener MySQL disponible antes de iniciar la API.
+1. Push a `main`.
+2. Build de imagen.
+3. Push a ECR.
+4. Despliegue remoto vía SSM en EC2.
+5. Recreación de contenedores MySQL y API con la nueva versión.
