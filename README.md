@@ -4,7 +4,7 @@ Este repositorio usa el workflow `.github/workflows/main.yml` para compilar, pub
 
 ## Disparador
 
-El pipeline se ejecuta en cada `push` a la rama `main`.
+El pipeline se ejecuta en cada `push` a la rama `deploy-eks`.
 
 ## Variables y secretos usados
 
