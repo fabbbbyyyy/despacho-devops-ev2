@@ -16,7 +16,7 @@ spec:
         - name: backend1-app    # ← K8S_CONTAINER_NAME en GitHub Secrets
           image: nginx:alpine   # placeholder, el workflow lo reemplaza con kubectl set image
           ports:
-            - containerPort: 8080
+            - containerPort: 8081
           env:
             - name: DB_ENDPOINT
               value: backend1-mysql-service   # nombre del Service de MySQL (abajo)
