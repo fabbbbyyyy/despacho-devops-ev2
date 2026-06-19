@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend1-mysql-service
+spec:
+  selector:
+    app: backend1-mysql
+  ports:
+    - port: 3306
+      targetPort: 3306
+  type: ClusterIP
