@@ -1,78 +1,173 @@
-# Flujo CI/CD
+# Despacho API — Rama deploy-eks
 
-Este repositorio usa el workflow `.github/workflows/main.yml` para compilar, publicar y desplegar la aplicación automáticamente.
+Backend en Java / Spring Boot para la gestión de despachos, equipado con un pipeline de integración y despliegue continuo (CI/CD) automatizado hacia AWS EKS (Elastic Kubernetes Service) a través de GitHub Actions.
 
-## Disparador
+## 1. Arquitectura del Backend
 
-El pipeline se ejecuta en cada `push` a la rama `deploy-eks`.
+El proyecto sigue una arquitectura tradicional por capas, garantizando la separación de responsabilidades:
 
-## Variables y secretos usados
+**Framework:** Spring Boot 3.4.x, Java 17.
 
-### Variable global del workflow
+**Capas del Código:**
+- `controller`: Expone la API REST (DespachoController).
+- `services`: Contiene la lógica de negocio (DespachoService, DespachoServiceImpl).
+- `repository`: Acceso a datos mediante Spring Data JPA (DespachoRepository).
+- `entity`: Modelo de datos persistente (Despacho).
+- `exceptions`: Manejo global de errores (RestResponseEntityExceptionHandler).
 
-- `REGISTRY_URL`: `${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com`
+**Bases de Datos:** MySQL en entorno de producción/runtime, y H2 en memoria para la ejecución de pruebas unitarias e integracionales.
 
-### Secrets requeridos
+**Documentación de la API:** Generada automáticamente con Springdoc OpenAPI y accesible vía Swagger UI.
 
+## 2. Configuración de Base de Datos
+
+La aplicación requiere las siguientes variables de entorno para construir dinámicamente la propiedad `spring.datasource.url`, el usuario y la contraseña en el archivo `application.properties`:
+
+- `DB_ENDPOINT` (Host del servidor de base de datos)
+- `DB_PORT` (Puerto de conexión, por defecto 3306)
+- `DB_NAME` (Nombre de la base de datos)
+- `DB_USERNAME` (Usuario de conexión)
+- `DB_PASSWORD` (Contraseña de conexión)
+
+## 3. Pipeline CI/CD (deploy-eks.yml)
+
+El flujo de despliegue automatizado está definido en `.github/workflows/deploy-eks.yml` y se dispara automáticamente al hacer un push a la rama `deploy-eks`, o bien de forma manual (`workflow_dispatch`).
+
+El workflow se compone de dos trabajos (jobs) principales:
+
+**Job 1: Build and Push Image**
+- Checkout del código fuente.
+- Configuración de credenciales de AWS.
+- Autenticación en Amazon ECR.
+- Construcción (Build) de la imagen Docker.
+- Publicación (Push) de la imagen utilizando dos tags de forma simultánea: el hash del commit (`${github.sha}`) y `latest`.
+
+**Job 2: Deploy to EKS**
+- Checkout del código fuente (manifiestos de Kubernetes).
+- Configuración de credenciales de AWS.
+- Instalación y configuración de `kubectl`.
+- Actualización del contexto de Kubernetes con `aws eks update-kubeconfig` apuntando a `EKS_CLUSTER_NAME`.
+- Creación o actualización del secreto de Kubernetes (`backend2-db-secret`) inyectando las siguientes variables:
+  - `MYSQL_DATABASE` ← `DB_NAME`
+  - `MYSQL_ROOT_PASSWORD` ← `DB_PASSWORD`
+  - `MYSQL_USER` ← `DB_USER`
+  - `MYSQL_PASSWORD` ← `DB_PASSWORD`
+- Aplicación de manifiestos: `kubectl apply -f k8s/ -n <namespace>`.
+- Actualización de la imagen del Deployment (`kubectl set image`) utilizando la nueva imagen publicada en ECR.
+- Verificación del estado del despliegue (`rollout status`) y listado de Pods/Services.
+
+## 4. Recursos de Kubernetes
+
+**Existentes en el directorio `k8s/`**
+- `deployment.yaml`: Configuración del pod del backend de la aplicación.
+- `service.yaml`: Expone el backend internamente dentro del clúster (ClusterIP).
+- `hpa.yaml`: Escalado horizontal automático (Horizontal Pod Autoscaler) para el backend.
+- `mysql-deployment.yaml`: Pod dedicado a la base de datos MySQL.
+- `mysql-service.yaml`: Expone la base de datos de manera interna (ClusterIP).
+
+**Faltantes o recomendables para entornos de producción**
+
+⚠️ Notas de optimización arquitectónica:
+
+- **Manifiesto del Namespace:** Actualmente se asume preexistente en el clúster. Se recomienda incluir su declaración explícita.
+- **Acceso Externo:** Implementar un recurso Ingress o configurar el Service como tipo LoadBalancer.
+- **Persistencia:** La plantilla de MySQL actual utiliza `emptyDir` (almacenamiento efímero). Es crítico migrar a un PersistentVolumeClaim (PVC) respaldado por AWS EBS o EFS para evitar la pérdida de datos al reiniciar el pod.
+- **Políticas y Probes:** Se sugiere robustecer los parámetros de Liveness/Readiness Probes, añadir NetworkPolicy para aislar el tráfico de la BD y configurar un PodDisruptionBudget.
+
+## 5. Endpoints y Documentación Expuesta
+
+**Base Path:** `/api/v1/despachos`
+
+| Método | Endpoint | Descripción |
+|--------|----------|-------------|
+| POST | `/api/v1/despachos` | Registra un nuevo despacho |
+| PUT | `/api/v1/despachos/{idDespacho}` | Actualiza un despacho existente por ID |
+| GET | `/api/v1/despachos` | Obtiene el listado completo de despachos |
+| GET | `/api/v1/despachos/{idDespacho}` | Obtiene el detalle de un despacho específico |
+| DELETE | `/api/v1/despachos/{idDespacho}` | Elimina el registro de un despacho |
+
+**Swagger UI:** Disponible localmente y en ambientes desplegados a través de la ruta `/swagger-ui.html`.
+
+## 6. Clonado y Ejecución Local
+
+### Requisitos Previos
+- Java 17 (JDK)
+- Maven (o utilizar el wrapper `./mvnw` incluido)
+- Instancia de MySQL activa
+
+### Pasos para iniciar la aplicación
+
+**Clonar el repositorio:**
+```bash
+git clone <repo-url>
+cd despacho-devops-ev2
+git checkout deploy-eks
+```
+
+**Configurar las variables de entorno (Ejemplo):**
+```bash
+export DB_ENDPOINT=localhost
+export DB_PORT=3306
+export DB_NAME=despachos
+export DB_USERNAME=root
+export DB_PASSWORD=secret
+```
+
+**Compilar y ejecutar la aplicación:**
+```bash
+./mvnw spring-boot:run
+```
+
+**Ejecutar las pruebas automatizadas:**
+```bash
+./mvnw test
+```
+
+### Construcción y ejecución local con Docker
+
+Para validar el empaquetado de la imagen de forma local, ejecuta:
+
+```bash
+# Construir la imagen local
+docker build -t despacho-api:local .
+
+# Ejecutar el contenedor conectándolo a una base de datos local
+docker run --rm -p 8080:8080 \
+  -e DB_ENDPOINT=host.docker.internal \
+  -e DB_PORT=3306 \
+  -e DB_NAME=despachos \
+  -e DB_USERNAME=root \
+  -e DB_PASSWORD=secret \
+  despacho-api:local
+```
+
+## 7. Despliegue en EKS (Resumen Operacional)
+
+Para que el flujo de GitHub Actions se ejecute de manera correcta, es mandatorio configurar los siguientes secretos en el repositorio (Settings > Secrets and variables > Actions):
+
+**Credenciales AWS:**
 - `AWS_ACCOUNT_ID`
 - `AWS_REGION`
 - `AWS_ACCESS_KEY_ID`
 - `AWS_SECRET_ACCESS_KEY`
-- `AWS_SESSION_TOKEN`
+- `AWS_SESSION_TOKEN` (si aplica)
 - `AWS_ECR_REPOSITORY`
-- `EC2_INSTANCE_ID`
+
+**Variables de EKS:**
+- `EKS_CLUSTER_NAME`
+- `EKS_NAMESPACE`
+- `K8S_DEPLOYMENT_NAME`
+- `K8S_CONTAINER_NAME`
+
+**Variables de BD:**
 - `DB_NAME`
 - `DB_USER`
 - `DB_PASSWORD`
 
-## Job 1: Build and Push Image
+Una vez configurados los secretos, basta con realizar un push a la rama `deploy-eks` para iniciar el despliegue automático. Puedes monitorear el progreso en la pestaña Actions de GitHub.
 
-Nombre del job: `build-and-push`
+## 8. Notas Importantes
 
-Pasos:
-
-1. Checkout del repositorio.
-2. Configuración de credenciales AWS.
-3. Login a Amazon ECR.
-4. Build de la imagen Docker con dos tags:
-   - `${{ github.sha }}`
-   - `latest`
-5. Push de ambas tags al repositorio ECR.
-
-Resultado: la imagen de la API queda publicada en ECR.
-
-> Nota: el workflow publica tag inmutable (`${{ github.sha }}`) y `latest`. Para despliegues más predecibles y rollback controlado, se recomienda desplegar por SHA.
-
-## Job 2: Deploy to EC2 via SSM
-
-Nombre del job: `deploy-to-ec2`  
-Dependencia: se ejecuta después de `build-and-push`.
-
-Pasos:
-
-1. Configuración de credenciales AWS.
-2. Ejecución de un `aws ssm send-command` contra la instancia EC2.
-3. En la instancia, el script:
-   - Crea el directorio `/home/ec2-user/backend-despacho`.
-   - Hace login a ECR.
-   - Descarga la imagen `latest`.
-   - Crea la red Docker `api-network` (si no existe).
-   - Detiene y elimina contenedores previos `springboot-api` y `mysql-db`.
-   - Levanta contenedor MySQL (`mysql:8.0`) con volumen `mysql_data`.
-   - Espera 15 segundos.
-   - Levanta contenedor `springboot-api` en puerto `8081` con variables de entorno para DB.
-   - Limpia imágenes no utilizadas con `docker image prune -a -f`.
-
-Resultado: despliegue actualizado de base de datos + API en EC2.
-
-> Notas operativas:
-> - El `sleep 15` es una espera fija y puede no garantizar que MySQL esté realmente listo; se recomienda usar healthchecks o una verificación activa antes de iniciar la API.
-> - `docker image prune -a -f` elimina todas las imágenes no usadas, lo que puede reducir capacidad de rollback rápido; para una limpieza menos agresiva se puede usar `docker image prune -f`.
-
-## Resumen del flujo
-
-1. Push a `main`.
-2. Build de imagen.
-3. Push a ECR.
-4. Despliegue remoto vía SSM en EC2.
-5. Recreación de contenedores MySQL y API con la nueva versión.
+- **Imagen Placeholder:** El archivo `deployment.yaml` original define una imagen ligera temporal (`nginx:alpine`). El workflow se encarga de sobreescribir esta propiedad dinámicamente con la imagen correcta construida en ECR mediante el comando `kubectl set image`.
+- **Secreto de Base de Datos:** Los manifiestos incluidos en `k8s/` consumen de forma mandatoria un secret de Kubernetes llamado `backend2-db-secret`.
+- **Flujos Alternativos:** El repositorio cuenta con otro archivo de workflow (`.github/workflows/main.yml`) diseñado exclusivamente para despliegues orientados a instancias AWS EC2 tradicionales a través de AWS Systems Manager (SSM). No debe confundirse con la arquitectura EKS de esta rama.
